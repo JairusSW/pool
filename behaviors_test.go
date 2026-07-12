@@ -1,9 +1,53 @@
 package pool
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 )
+
+func TestIntegrationAutoCeilingBoundsGrowth(t *testing.T) {
+	// Pin parallelism so the CPU-derived ceiling is deterministic on any host.
+	prev := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(prev)
+
+	// Elastic pool, no explicit MaxWorkers -> ceiling auto-sized to GOMAXPROCS (2).
+	r := newRig(t, PoolOptions{Strategy: RoundRobin, MinWorkers: 1, TargetPerWorker: 1, Worker: bigMailbox}, 1, 0)
+	defer r.close()
+
+	r.d.gate.Lock() // pause workers so a backlog accumulates
+	resumed := false
+	resume := func() {
+		if !resumed {
+			r.d.gate.Unlock()
+			resumed = true
+		}
+	}
+	defer resume()
+
+	r.invoke(t, "start")
+	if got := r.stats(t).Max; got != 2 {
+		t.Fatalf("auto ceiling Max = %d, want 2 (GOMAXPROCS)", got)
+	}
+
+	// A backlog large enough to want 12 workers (12 tasks / target 1)...
+	const backlog = 12
+	for i := 0; i < backlog; i++ {
+		if _, err := r.d.pools.Submit(r.d.pool(), uint64(i), []byte("q")); err != nil {
+			t.Fatalf("submit %d: %v", i, err)
+		}
+	}
+	waitFor(t, "backlog to register", func() bool { return r.stats(t).Outstanding == backlog })
+
+	r.invoke(t, "reconcile")
+	// ...is capped at the optimal count, so the pool never oversubscribes the CPU.
+	if got := r.stats(t).Live; got != 2 {
+		t.Fatalf("autoscaled live = %d, want 2 (optimal ceiling)", got)
+	}
+
+	resume()
+	waitFor(t, "backlog to drain", func() bool { return r.stats(t).Outstanding == 0 })
+}
 
 // tinyQueue makes each worker hold exactly one message, so a paused pool
 // overflows on the second submit to the same worker.

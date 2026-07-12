@@ -1,10 +1,85 @@
 package pool
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/wago-org/workers"
 )
+
+func TestOptimalWorkers(t *testing.T) {
+	if got := OptimalWorkers(); got < 1 {
+		t.Fatalf("OptimalWorkers() = %d, want >= 1", got)
+	}
+	if got, want := OptimalWorkers(), uint32(runtime.GOMAXPROCS(0)); got != want {
+		t.Fatalf("OptimalWorkers() = %d, want GOMAXPROCS %d", got, want)
+	}
+}
+
+func TestAutoMaxWorkersFromCPU(t *testing.T) {
+	prev := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(prev)
+
+	// Elastic pool with no explicit ceiling: MaxWorkers = OptimalWorkers().
+	o, err := normalizePoolOptions(PoolOptions{TargetPerWorker: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.MaxWorkers != 4 {
+		t.Fatalf("auto MaxWorkers = %d, want 4 (GOMAXPROCS)", o.MaxWorkers)
+	}
+	// A MinWorkers above the optimal raises the ceiling to MinWorkers.
+	if o, _ = normalizePoolOptions(PoolOptions{TargetPerWorker: 8, MinWorkers: 6}); o.MaxWorkers != 6 {
+		t.Fatalf("auto MaxWorkers = %d, want 6 (>= MinWorkers)", o.MaxWorkers)
+	}
+	// No autoscaling: MaxWorkers stays at MinWorkers; the CPU is not consulted.
+	if o, _ = normalizePoolOptions(PoolOptions{MinWorkers: 2}); o.MaxWorkers != 2 {
+		t.Fatalf("fixed MaxWorkers = %d, want 2", o.MaxWorkers)
+	}
+	// An explicit ceiling is always respected.
+	if o, _ = normalizePoolOptions(PoolOptions{TargetPerWorker: 8, MaxWorkers: 32}); o.MaxWorkers != 32 {
+		t.Fatalf("explicit MaxWorkers = %d, want 32", o.MaxWorkers)
+	}
+}
+
+func TestRunnableBudgetClamp(t *testing.T) {
+	p := &Pools{limits: normalizeLimits(Limits{RunnableWorkers: 4})}
+	mk := func(live int, min uint32) *pool {
+		pl := &pool{capMin: min, capMax: 16, perWorker: 1, desired: 8, byWorker: map[WorkerID]*member{}}
+		for i := 0; i < live; i++ {
+			pl.members = append(pl.members, &member{id: WorkerID(i + 1)})
+		}
+		return pl
+	}
+	// No other workers: clamp the load target (8) down to the budget (4).
+	pl := mk(2, 1)
+	p.total = 2
+	p.clampToRunnableBudgetLocked(pl)
+	if pl.desired != 4 {
+		t.Fatalf("desired = %d, want 4 (budget)", pl.desired)
+	}
+	// Other pools hold 3 of the 4-worker budget: only one slot remains.
+	pl = mk(2, 1)
+	p.total = 5 // 2 here + 3 elsewhere
+	p.clampToRunnableBudgetLocked(pl)
+	if pl.desired != 1 {
+		t.Fatalf("desired = %d, want 1 (budget minus others)", pl.desired)
+	}
+	// Budget already oversubscribed by others: the MinWorkers floor is preserved.
+	pl = mk(1, 2)
+	p.total = 10
+	p.clampToRunnableBudgetLocked(pl)
+	if pl.desired != 2 {
+		t.Fatalf("desired = %d, want 2 (MinWorkers floor preserved)", pl.desired)
+	}
+	// A fixed pool (autoscale off) is never clamped.
+	fixed := &pool{capMin: 3, capMax: 3, desired: 3, byWorker: map[WorkerID]*member{}}
+	p.total = 100
+	p.clampToRunnableBudgetLocked(fixed)
+	if fixed.desired != 3 {
+		t.Fatalf("fixed desired = %d, want 3 (never clamped)", fixed.desired)
+	}
+}
 
 func TestNormalizeLimits(t *testing.T) {
 	got := normalizeLimits(Limits{})

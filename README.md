@@ -49,9 +49,10 @@ It is the policy layer `workers` deliberately leaves out. Where `workers` gives 
 
 - **Load balancing** across a fleet with six routing strategies — round-robin,
   least-loaded, random, power-of-two-choices, consistent-hash, and broadcast.
-- **Autoscaling** — a pool grows toward `MaxWorkers` under load and shrinks back to
-  `MinWorkers` when idle, driven by a simple, timer-free target: outstanding tasks
-  per worker.
+- **Autoscaling** — a pool grows under load and shrinks back when idle, driven by a
+  simple, timer-free target: outstanding tasks per worker. The ceiling is computed
+  from the machine's parallelism by default, so pools fill the CPU without
+  oversubscribing it.
 - **Supervision** — workers that trap, are killed, or return are replaced according
   to a restart policy, with crash-loop protection.
 - **Backpressure** — full mailboxes spill to other workers, reject, or shed, your
@@ -233,8 +234,8 @@ happens:
 
 ### Autoscaling
 
-Set `TargetPerWorker > 0` (with `MaxWorkers > MinWorkers`) to make a pool **elastic**.
-Its desired size is derived — with no timers — from current load:
+Set `TargetPerWorker > 0` to make a pool **elastic**. Its desired size is derived —
+with no timers — from current load:
 
 ```
 desired = clamp(ceil(totalOutstanding / TargetPerWorker), MinWorkers, MaxWorkers)
@@ -244,6 +245,18 @@ desired = clamp(ceil(totalOutstanding / TargetPerWorker), MinWorkers, MaxWorkers
 up a deficit (needs the live caller, since spawning forks it) and kills **idle**
 workers when the pool is over target — never dropping queued work. `SubmitFrom` calls
 `Reconcile` for you on the hot path, so a busy pool grows itself.
+
+**Optimal sizing, no oversubscription.** You don't have to guess a ceiling. Leave
+`MaxWorkers` at `0` on an elastic pool and it is sized to `OptimalWorkers()` — the
+machine's parallelism (`GOMAXPROCS`) — so the pool grows to fill the CPU but never
+runs more compute-bound workers than the hardware can execute in parallel (which only
+adds context-switching, scheduler contention, and cache pressure). Across pools, the
+service-wide `RunnableWorkers` budget (also `OptimalWorkers()` by default) caps how
+many workers autoscaling will run at once, so several busy elastic pools can't
+collectively oversubscribe the CPU. Each pool's `MinWorkers` floor is always honored;
+the budget caps *growth*, never starves a pool. Call `pool.OptimalWorkers()` yourself
+to size things explicitly, and set `MaxWorkers`/`RunnableWorkers` higher for
+I/O-bound workloads that benefit from more concurrency than cores.
 
 For a **fixed** pool (leave `TargetPerWorker` at 0), the size is what you set:
 `MinWorkers` at creation, adjusted by `Scale(caller, id, target)` and supervision.
@@ -301,7 +314,7 @@ Observers add zero cost to the hot path when none are registered.
 | `Overflow` | `OverflowSpill` | Full-mailbox behavior. |
 | `Restart` | `RestartOnFailure` | Replacement policy for a fixed pool. |
 | `MinWorkers` | `1` | Initial size and autoscale floor. |
-| `MaxWorkers` | `= MinWorkers` | Autoscale ceiling (0 = fixed pool). |
+| `MaxWorkers` | `OptimalWorkers()` if elastic, else `= MinWorkers` | Autoscale ceiling. `0` auto-sizes an elastic pool to the CPU. |
 | `TargetPerWorker` | `0` (off) | Outstanding tasks per worker; turns autoscaling on. |
 | `MaxRestarts` | `16` | Replacement budget; `UnlimitedRestarts` disables it. |
 | `Worker` | `workers` defaults | Per-worker mailbox bounds (`workers.WorkerOptions`). |
@@ -314,10 +327,13 @@ Observers add zero cost to the hot path when none are registered.
 | --- | --- | --- |
 | `MaxPools` | `64` | Maximum pools at once. |
 | `MaxWorkersPerPool` | `64` | Cap per pool, overriding a larger `MaxWorkers`. |
-| `MaxTotalWorkers` | `256` | Cap on workers summed across all pools. |
+| `MaxTotalWorkers` | `256` | Hard cap on workers summed across all pools. |
+| `RunnableWorkers` | `OptimalWorkers()` | Cap on workers autoscaling will run across all pools, to avoid CPU oversubscription. Growth-only; floors are always honored. |
 
-These sit above the `workers` service's own `WorkerLimits`, which is the hard ceiling
-on live workers.
+`MaxPools`/`MaxWorkersPerPool`/`MaxTotalWorkers` are hard safety bounds;
+`RunnableWorkers` is the performance guard that keeps elastic pools from
+oversubscribing the CPU. All of these sit above the `workers` service's own
+`WorkerLimits`, which is the hard ceiling on live workers.
 
 ### Errors
 

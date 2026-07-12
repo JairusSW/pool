@@ -18,6 +18,7 @@ package pool
 
 import (
 	"context"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,21 @@ import (
 	"github.com/wago-org/wago/plugin"
 	"github.com/wago-org/workers"
 )
+
+// OptimalWorkers returns the recommended ceiling on simultaneously busy workers
+// for CPU-bound wasm work on this machine: GOMAXPROCS, at least 1. Workers run
+// their guest on their own goroutines, so once as many workers are churning as
+// the runtime can execute in parallel, adding more does not add throughput — it
+// adds context switching, scheduler contention, and cache pressure that
+// deteriorate performance. An elastic pool that leaves PoolOptions.MaxWorkers
+// unset uses this as its ceiling, and the service's RunnableWorkers budget uses
+// it to keep pools from collectively oversubscribing the CPU.
+func OptimalWorkers() uint32 {
+	if n := runtime.GOMAXPROCS(0); n > 0 {
+		return uint32(n)
+	}
+	return 1
+}
 
 // PluginName is the registration name of the pool plugin.
 const PluginName = "JairusSW/pool"
@@ -145,6 +161,12 @@ type Limits struct {
 	MaxWorkersPerPool uint32
 	// MaxTotalWorkers caps the workers summed across all pools.
 	MaxTotalWorkers uint32
+	// RunnableWorkers bounds how many workers autoscaling will run across all
+	// pools at once, so elastic pools do not collectively oversubscribe the CPU
+	// and deteriorate throughput. Zero takes OptimalWorkers() — the machine's
+	// parallelism. It caps autoscale growth only: a pool's MinWorkers floor and any
+	// size set explicitly with Scale are always honored, even beyond this budget.
+	RunnableWorkers uint32
 }
 
 func normalizeLimits(l Limits) Limits {
@@ -156,6 +178,9 @@ func normalizeLimits(l Limits) Limits {
 	}
 	if l.MaxTotalWorkers == 0 {
 		l.MaxTotalWorkers = DefaultMaxTotalWorkers
+	}
+	if l.RunnableWorkers == 0 {
+		l.RunnableWorkers = OptimalWorkers()
 	}
 	return l
 }
@@ -173,8 +198,10 @@ type PoolOptions struct {
 	Restart RestartPolicy
 	// MinWorkers is both the initial pool size and the autoscale floor. Default 1.
 	MinWorkers uint32
-	// MaxWorkers is the autoscale ceiling. Zero (or equal to MinWorkers) means a
-	// fixed-size pool with no autoscaling.
+	// MaxWorkers is the autoscale ceiling. When zero: an autoscaling pool
+	// (TargetPerWorker > 0) sizes the ceiling to OptimalWorkers() — the machine's
+	// parallelism — so it fills the CPU without oversubscribing it; a pool with no
+	// autoscaling stays fixed at MinWorkers.
 	MaxWorkers uint32
 	// TargetPerWorker turns on autoscaling: the pool keeps roughly this many
 	// outstanding tasks per worker, growing toward MaxWorkers under load and back
@@ -216,7 +243,16 @@ func normalizePoolOptions(o PoolOptions) (PoolOptions, error) {
 		o.MinWorkers = 1
 	}
 	if o.MaxWorkers == 0 {
-		o.MaxWorkers = o.MinWorkers
+		if o.TargetPerWorker > 0 {
+			// Autoscaling requested with no explicit ceiling: size it to the machine
+			// so the pool grows to fill the CPU but never oversubscribes it.
+			o.MaxWorkers = OptimalWorkers()
+			if o.MaxWorkers < o.MinWorkers {
+				o.MaxWorkers = o.MinWorkers
+			}
+		} else {
+			o.MaxWorkers = o.MinWorkers // fixed pool
+		}
 	}
 	if o.MaxRestarts == 0 {
 		o.MaxRestarts = DefaultMaxRestarts
@@ -919,6 +955,7 @@ func (p *Pools) Reconcile(caller wago.HostModule, id PoolID) error {
 		return ErrPoolNotFound
 	}
 	pl.recomputeDesired()
+	p.clampToRunnableBudgetLocked(pl)
 	live := uint32(len(pl.members))
 	desired := pl.desired
 	var toKill []WorkerID
@@ -975,6 +1012,28 @@ func (pl *pool) recomputeDesired() {
 		target = uint64(pl.capMax)
 	}
 	pl.desired = uint32(target)
+}
+
+// clampToRunnableBudgetLocked lowers an elastic pool's autoscale target so the
+// total workers across all pools do not grow past the service's RunnableWorkers
+// budget (the machine's parallelism by default), preventing CPU oversubscription
+// when several elastic pools are busy at once. The pool's MinWorkers floor is
+// always preserved — the budget caps growth, it never starves a pool below its
+// minimum. Called under p.mu, after recomputeDesired.
+func (p *Pools) clampToRunnableBudgetLocked(pl *pool) {
+	if !pl.autoscale() {
+		return
+	}
+	other := p.total - uint32(len(pl.members)) // workers held by the other pools
+	room := pl.capMin
+	if p.limits.RunnableWorkers > other {
+		if avail := p.limits.RunnableWorkers - other; avail > room {
+			room = avail
+		}
+	}
+	if pl.desired > room {
+		pl.desired = room
+	}
 }
 
 // Scale sets a fixed-size pool's target worker count (clamped to the pool's

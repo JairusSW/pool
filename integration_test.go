@@ -262,7 +262,9 @@ type rig struct {
 }
 
 func newRig(t *testing.T, opts PoolOptions, count, scaleTarget uint32) *rig {
-	return newRigLim(t, opts, count, scaleTarget, Limits{MaxPools: 32, MaxWorkersPerPool: 64, MaxTotalWorkers: 256})
+	// RunnableWorkers is set high so autoscale tests are deterministic regardless of
+	// the host's core count; the CPU-budget guard is exercised on its own.
+	return newRigLim(t, opts, count, scaleTarget, Limits{MaxPools: 32, MaxWorkersPerPool: 64, MaxTotalWorkers: 256, RunnableWorkers: 256})
 }
 
 func newRigLim(t *testing.T, opts PoolOptions, count, scaleTarget uint32, limits Limits) *rig {
