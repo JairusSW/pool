@@ -1,0 +1,4 @@
+github.com/wago-org/wago v0.0.0-20260711053856-7d89b98c854d h1:fzJn6UlsGwiqwyTN+Si6oFoETUhUoJ/Rphhx94M5Pqc=
+github.com/wago-org/wago v0.0.0-20260711053856-7d89b98c854d/go.mod h1:d44S+59u6VHeqEaIZBKTeB8viyswTP97O9IKA6Gyzc4=
+github.com/wago-org/workers v0.0.0-20260712075105-c0bceb592dc0 h1:CRsh9Z+Iilmr6odi9Xlg2asrpffciQrHIARIVlzQ9sg=
+github.com/wago-org/workers v0.0.0-20260712075105-c0bceb592dc0/go.mod h1:lRgtcCNsXr30h+ZovoKMGhKMvk6slR1cwFDZ7HoBo2g=
