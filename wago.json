@@ -9,7 +9,7 @@
   "homepage": "https://github.com/JairusSW/pool",
   "repository": "https://github.com/JairusSW/pool",
   "authors": ["JairusSW"],
-  "keywords": ["pool", "workers", "load-balancing", "autoscaling", "supervision", "concurrency", "webassembly"],
+  "keywords": ["pool", "worker-pool", "workers", "load-balancing", "load-balancer", "autoscaling", "elastic", "supervision", "fleet", "dispatch", "concurrency", "webassembly", "wasm"],
   "category": "concurrency",
   "engines": { "wago": ">=0.1.0" },
   "dependencies": ["github.com/wago-org/workers"],
