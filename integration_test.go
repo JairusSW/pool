@@ -259,6 +259,11 @@ type rig struct {
 	d  *driver
 	rt *wago.Runtime
 	in *wago.Instance
+	// mod is retained for the rig's whole lifetime on purpose: the runtime sets a
+	// finalizer on the compiled module that closes its executable code mapping when
+	// the module is garbage-collected, after which forking a worker fails with
+	// "compiled module is closed". Keeping the reference alive prevents that.
+	mod *wago.Module
 }
 
 func newRig(t *testing.T, opts PoolOptions, count, scaleTarget uint32) *rig {
@@ -290,7 +295,7 @@ func newRigLim(t *testing.T, opts PoolOptions, count, scaleTarget uint32, limits
 	if err != nil {
 		t.Fatalf("instantiate: %v", err)
 	}
-	return &rig{d: d, rt: rt, in: in}
+	return &rig{d: d, rt: rt, in: in, mod: mod}
 }
 
 func (r *rig) invoke(t *testing.T, name string) {
