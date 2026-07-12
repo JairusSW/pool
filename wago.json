@@ -8,11 +8,11 @@
   "license": "Apache-2.0",
   "homepage": "https://github.com/JairusSW/pool",
   "repository": "https://github.com/JairusSW/pool",
-  "authors": ["The wago authors"],
+  "authors": ["JairusSW"],
   "keywords": ["pool", "workers", "load-balancing", "autoscaling", "supervision", "concurrency", "webassembly"],
   "category": "concurrency",
   "engines": { "wago": ">=0.1.0" },
-  "dependencies": ["github.com/JairusSW/workers"],
+  "dependencies": ["github.com/wago-org/workers"],
   "plugins": [
     {
       "name": "github.com/JairusSW/pool",
