@@ -1,21 +1,21 @@
 {
   "$schema": "https://wago.sh/schema.json",
   "schema": "wago-plugin/v1",
-  "module": "github.com/wago-org/pool",
+  "module": "github.com/JairusSW/pool",
   "name": "Pool",
   "version": "0.0.0",
   "description": "Elastic, load-balanced, self-healing pools of Wago workers: create, manage, and distribute work across fleets of WebAssembly workers.",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/wago-org/pool",
-  "repository": "https://github.com/wago-org/pool",
+  "homepage": "https://github.com/JairusSW/pool",
+  "repository": "https://github.com/JairusSW/pool",
   "authors": ["The wago authors"],
   "keywords": ["pool", "workers", "load-balancing", "autoscaling", "supervision", "concurrency", "webassembly"],
   "category": "concurrency",
   "engines": { "wago": ">=0.1.0" },
-  "dependencies": ["github.com/wago-org/workers"],
+  "dependencies": ["github.com/JairusSW/workers"],
   "plugins": [
     {
-      "name": "github.com/wago-org/pool",
+      "name": "github.com/JairusSW/pool",
       "capabilities": {}
     }
   ]

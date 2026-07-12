@@ -28,7 +28,7 @@ import (
 )
 
 // PluginName is the registration name of the pool plugin.
-const PluginName = "wago-org/pool"
+const PluginName = "JairusSW/pool"
 
 // WorkerID and WorkerOptions are re-exported from the workers plugin for the
 // convenience of callers that only import pool.
@@ -318,7 +318,7 @@ func (*Plugin) Info() wago.ExtensionInfo {
 	return wago.ExtensionInfo{
 		ID: "wago.pool", Name: "Pool", Version: "0.1.0",
 		Description: "Elastic, load-balanced, self-healing pools of Wago workers",
-		Stability:   wago.Experimental, Repository: "https://github.com/wago-org/pool",
+		Stability:   wago.Experimental, Repository: "https://github.com/JairusSW/pool",
 		License: "Apache-2.0",
 		Tags:    []string{"pool", "workers", "load-balancing", "autoscaling", "supervision"},
 		Compat:  wago.Compatibility{Engines: map[string]string{"wago": ">=0.1.0"}},

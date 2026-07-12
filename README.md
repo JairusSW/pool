@@ -4,8 +4,8 @@
 </div>
 
 <p align="center">
-    <a href="https://github.com/wago-org/pool/actions/workflows/ci.yml"><img src="https://github.com/wago-org/pool/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-    <a href="https://codecov.io/gh/wago-org/pool"><img src="https://codecov.io/gh/wago-org/pool/branch/main/graph/badge.svg" alt="Coverage"></a>
+    <a href="https://github.com/JairusSW/pool/actions/workflows/ci.yml"><img src="https://github.com/JairusSW/pool/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+    <a href="https://codecov.io/gh/JairusSW/pool"><img src="https://codecov.io/gh/JairusSW/pool/branch/main/graph/badge.svg" alt="Coverage"></a>
     <a href="https://go.dev/"><img src="https://img.shields.io/badge/go-%3E%3D1.24-00ADD8.svg" alt="Go >= 1.24"></a>
     <a href="https://github.com/wago-org/wago"><img src="https://img.shields.io/badge/wago-%3E%3D0.1.0-6E56CF.svg" alt="Wago >= 0.1.0"></a>
 </p>
@@ -72,13 +72,13 @@ enforced by the underlying `workers` service.
 If you have the [`wago`](https://github.com/wago-org/wago) CLI installed:
 
 ```sh
-wago pkg install github.com/wago-org/pool
+wago pkg install github.com/JairusSW/pool
 ```
 
 or use [`go get`](https://pkg.go.dev/cmd/go#hdr-Get_packages_and_dependencies):
 
 ```sh
-go get github.com/wago-org/pool
+go get github.com/JairusSW/pool
 ```
 
 The pool plugin needs **no privileged capabilities of its own** — it composes the
@@ -88,7 +88,7 @@ pool must therefore also register `workers` and grant it `instance.manage` and
 
 ```json
 {
-  "dependencies": ["github.com/wago-org/pool", "github.com/wago-org/workers"],
+  "dependencies": ["github.com/JairusSW/pool", "github.com/wago-org/workers"],
   "plugins": [
     {
       "name": "github.com/wago-org/workers",
@@ -97,7 +97,7 @@ pool must therefore also register `workers` and grant it `instance.manage` and
         "instance.lifecycle": true
       }
     },
-    { "name": "github.com/wago-org/pool" }
+    { "name": "github.com/JairusSW/pool" }
   ]
 }
 ```
@@ -129,7 +129,7 @@ import (
 
 	"github.com/wago-org/wago"
 	"github.com/wago-org/workers"
-	"github.com/wago-org/pool"
+	"github.com/JairusSW/pool"
 )
 
 func main() {
@@ -358,7 +358,7 @@ A generated Wago host does not import this package directly; it blank-imports th
 pool and its `workers` dependency:
 
 ```go
-import _ "github.com/wago-org/pool/register"
+import _ "github.com/JairusSW/pool/register"
 ```
 
 ## Testing
@@ -415,7 +415,7 @@ through [GitHub Sponsors](https://github.com/sponsors/JairusSW).
 
 ## Contact
 
-Please file issues at [GitHub Issues](https://github.com/wago-org/pool/issues). To chat,
+Please file issues at [GitHub Issues](https://github.com/JairusSW/pool/issues). To chat,
 join the [Wago Discord](https://wago.sh/discord).
 
 - **GitHub:** [https://github.com/wago-org/](https://github.com/wago-org/)

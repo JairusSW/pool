@@ -9,7 +9,7 @@ import (
 // Importing this package must register the pool plugin and its workers
 // dependency into the engine's global plugin registry as a side effect.
 func TestRegistersPoolAndWorkers(t *testing.T) {
-	ext, ok := wago.NewExtension("wago-org/pool")
+	ext, ok := wago.NewExtension("JairusSW/pool")
 	if !ok {
 		t.Fatal("pool extension was not registered")
 	}

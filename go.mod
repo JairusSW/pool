@@ -1,4 +1,4 @@
-module github.com/wago-org/pool
+module github.com/JairusSW/pool
 
 go 1.24.0
 

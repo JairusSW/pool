@@ -19,7 +19,7 @@ func TestPlanPathBindsWorkersService(t *testing.T) {
 		{Name: "wago-org/workers", Capabilities: []wago.PluginCapability{
 			wago.PluginManagedInstances, wago.PluginInstanceHooks,
 		}},
-		{Name: "wago-org/pool"},
+		{Name: "JairusSW/pool"},
 	})
 	if err != nil {
 		t.Fatalf("LoadPlugins(workers, pool): %v", err)
@@ -31,7 +31,7 @@ func TestPlanPathBindsWorkersService(t *testing.T) {
 func TestPlanPathMissingWorkersFails(t *testing.T) {
 	rt := wago.NewRuntime()
 	defer rt.Close()
-	err := rt.LoadPlugins([]wago.PluginConfig{{Name: "wago-org/pool"}})
+	err := rt.LoadPlugins([]wago.PluginConfig{{Name: "JairusSW/pool"}})
 	if err == nil {
 		t.Fatal("LoadPlugins(pool alone) succeeded; want a missing-provider error")
 	}
