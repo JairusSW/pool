@@ -66,7 +66,7 @@ The whole thing is bounded by construction: every pool has a worker ceiling, and
 service has aggregate caps on pools and total workers — on top of the hard ceiling
 enforced by the underlying `workers` service.
 
-> **Stability:** experimental (`v0.1.0`). The API may change before `v1.0.0`.
+> **Stability:** experimental (`v0.0.0`). The API may change without notice.
 
 ## Installation
 
@@ -89,17 +89,34 @@ pool must therefore also register `workers` and grant it `instance.manage` and
 
 ```json
 {
-  "dependencies": ["github.com/JairusSW/pool", "github.com/wago-org/workers"],
-  "plugins": [
-    {
-      "name": "github.com/wago-org/workers",
+  "$schema": "https://wago.sh/v0/schema.json",
+  "plugins": {
+    "JairusSW/pool": "^0.0.0",
+    "wago-org/workers": "^0.0.0"
+  }
+}
+```
+
+The reviewed worker authority is recorded in `wago-lock.json`:
+
+```json
+{
+  "plugins": {
+    "wago-org/workers": {
+      "version": "0.0.0",
+      "requiredCapabilities": [
+        "instance.manage",
+        "instance.lifecycle"
+      ],
       "capabilities": {
         "instance.manage": { "maxInstances": 256 },
         "instance.lifecycle": true
       }
     },
-    { "name": "github.com/JairusSW/pool" }
-  ]
+    "JairusSW/pool": {
+      "version": "0.0.0"
+    }
+  }
 }
 ```
 
