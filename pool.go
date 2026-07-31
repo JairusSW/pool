@@ -352,7 +352,7 @@ func New(opts ...Option) *Plugin {
 
 func (*Plugin) Info() wago.ExtensionInfo {
 	return wago.ExtensionInfo{
-		ID: "wago.pool", Name: "Pool", Version: "0.1.0",
+		ID: "wago.pool", Name: "Pool", Version: "0.0.0",
 		Description: "Elastic, load-balanced, self-healing pools of Wago workers",
 		Stability:   wago.Experimental, Repository: "https://github.com/JairusSW/pool",
 		License: "Apache-2.0",

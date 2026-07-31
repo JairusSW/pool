@@ -1,6 +1,5 @@
 {
-  "$schema": "https://wago.sh/schema.json",
-  "schema": "wago-plugin/v1",
+  "$schema": "https://wago.sh/v0/schema.json",
   "module": "github.com/JairusSW/pool",
   "name": "Pool",
   "version": "0.0.0",
@@ -12,11 +11,7 @@
   "keywords": ["pool", "worker-pool", "workers", "load-balancing", "load-balancer", "autoscaling", "elastic", "supervision", "fleet", "dispatch", "concurrency", "webassembly", "wasm"],
   "category": "concurrency",
   "engines": { "wago": ">=0.1.0" },
-  "dependencies": ["github.com/wago-org/workers"],
-  "plugins": [
-    {
-      "name": "github.com/JairusSW/pool",
-      "capabilities": {}
-    }
-  ]
+  "plugins": {
+    "wago-org/workers": "^0.0.0"
+  }
 }
