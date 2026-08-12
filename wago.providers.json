@@ -1,0 +1,74 @@
+{
+  "$schema": "https://wago.sh/v1/providers.schema.json",
+  "providers": [
+    {
+      "importPath": "github.com/JairusSW/pool/register",
+      "definition": {
+        "id": "github.com/JairusSW/pool",
+        "name": "Pool",
+        "version": "0.1.0",
+        "description": "Elastic, load-balanced, self-healing pools of Wago workers.",
+        "stability": "experimental",
+        "compatibility": {
+          "engines": {
+            "wago": "\u003e=0.1.0"
+          }
+        },
+        "provenance": {
+          "homepage": "https://github.com/JairusSW/pool",
+          "repository": "https://github.com/JairusSW/pool",
+          "license": "Apache-2.0",
+          "authors": [
+            "Jairus Tanaka"
+          ]
+        },
+        "requires": [
+          {
+            "id": "github.com/wago-org/workers",
+            "version": "^0.1.0"
+          }
+        ],
+        "configSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "maxPools": {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxTotalWorkers": {
+              "maximum": 1048576,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxWorkersPerPool": {
+              "maximum": 65536,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "runnableWorkers": {
+              "maximum": 1048576,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "provides": [
+          {
+            "id": "github.com/JairusSW/pool/service",
+            "major": 1
+          }
+        ],
+        "consumes": [
+          {
+            "id": "github.com/wago-org/workers/service",
+            "major": 1,
+            "mode": "required"
+          }
+        ]
+      },
+      "definitionDigest": "sha256:7b35e7dbafbeb8bc6c89f9171b70798fb5fd096d9ee8cd7014d5a39fcee7d9e0"
+    }
+  ]
+}
