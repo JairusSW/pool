@@ -1,10 +1,14 @@
 package pool
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/wago-org/wago"
+	"github.com/wago-org/workers"
 )
 
 // bigMailbox gives workers deep mailboxes so a stress burst never overflows and
@@ -290,15 +294,28 @@ func TestStressRuntimeCloseWhileBusy(t *testing.T) {
 			}
 		}()
 	}
-	time.Sleep(5 * time.Millisecond)
-	stop.Store(true)
-	wg.Wait()
-
 	done := make(chan struct{})
 	go func() { r.close(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
+		stop.Store(true)
+		wg.Wait()
 		t.Fatal("runtime close hung while busy")
+	}
+	// Keep producers racing with shutdown itself: close must revoke admission,
+	// drain accepted work, and return without requiring callers to stop first.
+	stop.Store(true)
+	wg.Wait()
+	if err := r.d.poolRef.With(func(Service) error { return nil }); !errors.Is(err, wago.ErrPermissionDenied) {
+		t.Fatalf("pool contract after close = %v", err)
+	}
+	if err := r.d.workers.With(func(workers.Service) error { return nil }); !errors.Is(err, wago.ErrPermissionDenied) {
+		t.Fatalf("Workers contract after close = %v", err)
+	}
+	messages := r.d.messages()
+	time.Sleep(10 * time.Millisecond)
+	if got := r.d.messages(); got != messages {
+		t.Fatalf("late callback after close: messages changed from %d to %d", messages, got)
 	}
 }

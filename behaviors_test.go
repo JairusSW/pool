@@ -159,11 +159,15 @@ func TestIntegrationOnEvent(t *testing.T) {
 
 	var mu sync.Mutex
 	kinds := map[PoolEventKind]int{}
-	r.d.pools.OnEvent(func(ev *PoolEvent) {
+	events, err := r.d.pools.ObserveEvents(func(ev *PoolEvent) {
 		mu.Lock()
 		kinds[ev.Kind]++
 		mu.Unlock()
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = r.d.pools.UnsubscribeEvents(events) }()
 
 	r.invoke(t, "start")
 	id := r.d.pool()

@@ -6,25 +6,30 @@
 // load-balancing strategy, keeps the pool at its target size by respawning or
 // scaling workers, and can grow and shrink with load. It builds entirely on the
 // primitives of the github.com/wago-org/workers plugin — Spawn, Send,
-// DispatchNext, Link, Kill, plus the OnMessage/OnExit host observers — and adds
+// DispatchNext, Link, Kill, plus owned message and exit subscriptions — and adds
 // the policy layer that workers deliberately leaves out: routing, supervision,
 // autoscaling, draining, and per-pool metrics.
 //
-// The pool plugin uses no core capabilities of its own. It composes the workers
-// service through workers.ServiceKey, so a host that registers pool must also
-// register workers (grant workers its instance.manage / instance.lifecycle
-// capabilities). See the README for the full model.
+// Pool requests no Wago Authorities of its own. Its explicit package dependency
+// selects Workers, and its typed Contract reference keeps every cross-plugin
+// call and shutdown dependency inside a revocable callback lease. See the README
+// for the full model.
 package pool
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 
 	"github.com/wago-org/wago"
-	"github.com/wago-org/wago/plugin"
+	wagoplugin "github.com/wago-org/wago/plugin"
 	"github.com/wago-org/workers"
 )
 
@@ -43,8 +48,7 @@ func OptimalWorkers() uint32 {
 	return 1
 }
 
-// PluginName is the registration name of the pool plugin.
-const PluginName = "JairusSW/pool"
+const PluginID = "github.com/JairusSW/pool"
 
 // WorkerID and WorkerOptions are re-exported from the workers plugin for the
 // convenience of callers that only import pool.
@@ -317,98 +321,196 @@ type PoolEvent struct {
 	Err      error
 }
 
-// ServiceKey exposes the Pools service to composing plugins.
-var ServiceKey = plugin.NewServiceKey[*Pools]("wago.pool/v1")
-
-// Plugin is the wago.Extension you register with a runtime.
-type Plugin struct {
-	service *Pools
-	limits  Limits
-	workers *workers.Workers
+// Service is Pool's major-versioned cross-plugin API.
+type Service interface {
+	Create(wago.HostModule, uint32, PoolOptions) (PoolID, error)
+	Submit(PoolID, uint64, []byte) (WorkerID, error)
+	SubmitKeyed(PoolID, uint64, uint64, []byte) (WorkerID, error)
+	SubmitFrom(wago.HostModule, PoolID, uint64, []byte) (WorkerID, error)
+	Broadcast(PoolID, uint64, []byte) (int, error)
+	Reconcile(wago.HostModule, PoolID) error
+	Scale(wago.HostModule, PoolID, uint32) error
+	Drain(PoolID) error
+	Destroy(PoolID) error
+	Stats(PoolID) (PoolStats, error)
+	List() []PoolID
+	ObserveEvents(func(*PoolEvent)) (EventSubscription, error)
+	UnsubscribeEvents(EventSubscription) error
 }
 
-// Option configures the Plugin at construction.
-type Option func(*Plugin)
+var Contract = wagoplugin.NewContract[Service](PluginID+"/service", 1)
 
-// WithLimits sets the aggregate resource limits for the pool service. Zero
-// fields fall back to the package defaults (see Limits).
-func WithLimits(l Limits) Option { return func(p *Plugin) { p.limits = l } }
+type pluginConfig struct {
+	MaxPools          *uint32 `json:"maxPools,omitempty"`
+	MaxWorkersPerPool *uint32 `json:"maxWorkersPerPool,omitempty"`
+	MaxTotalWorkers   *uint32 `json:"maxTotalWorkers,omitempty"`
+	RunnableWorkers   *uint32 `json:"runnableWorkers,omitempty"`
+}
 
-// WithWorkers wires the pool to an existing workers service explicitly, for
-// programmatic embedding via Runtime.Use (where cross-plugin service resolution
-// does not run). Obtain the handle from workers.Plugin.Service(). When omitted,
-// the pool resolves the workers service through workers.ServiceKey, which the
-// runtime binds on the manifest/LoadPlugins plan path.
-func WithWorkers(svc *workers.Workers) Option { return func(p *Plugin) { p.workers = svc } }
+var configSchema = json.RawMessage(`{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "maxPools": {"type": "integer", "minimum": 1, "maximum": 65536},
+    "maxWorkersPerPool": {"type": "integer", "minimum": 1, "maximum": 65536},
+    "maxTotalWorkers": {"type": "integer", "minimum": 1, "maximum": 1048576},
+    "runnableWorkers": {"type": "integer", "minimum": 1, "maximum": 1048576}
+  }
+}`)
 
-// New creates the pool plugin.
-func New(opts ...Option) *Plugin {
-	p := &Plugin{}
-	for _, opt := range opts {
-		opt(p)
+func decodePluginConfig(raw json.RawMessage) (pluginConfig, Limits, error) {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
 	}
-	return p
-}
-
-func (*Plugin) Info() wago.ExtensionInfo {
-	return wago.ExtensionInfo{
-		ID: "wago.pool", Name: "Pool", Version: "0.0.0",
-		Description: "Elastic, load-balanced, self-healing pools of Wago workers",
-		Stability:   wago.Experimental, Repository: "https://github.com/JairusSW/pool",
-		License: "Apache-2.0",
-		Tags:    []string{"pool", "workers", "load-balancing", "autoscaling", "supervision"},
-		Compat:  wago.Compatibility{Engines: map[string]string{"wago": ">=0.1.0"}},
-		// The pool plugin uses no core capabilities directly; it composes the
-		// workers service, which holds the privileged instance capabilities.
+	if err := validateConfigObject(raw); err != nil {
+		return pluginConfig{}, Limits{}, fmt.Errorf("pool: config: %w", err)
 	}
+	var cfg pluginConfig
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return pluginConfig{}, Limits{}, fmt.Errorf("pool: config: %w", err)
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		return pluginConfig{}, Limits{}, fmt.Errorf("pool: config has a trailing JSON value")
+	}
+	limits := normalizeLimits(Limits{})
+	if cfg.MaxPools != nil {
+		limits.MaxPools = *cfg.MaxPools
+	}
+	if cfg.MaxWorkersPerPool != nil {
+		limits.MaxWorkersPerPool = *cfg.MaxWorkersPerPool
+	}
+	if cfg.MaxTotalWorkers != nil {
+		limits.MaxTotalWorkers = *cfg.MaxTotalWorkers
+	}
+	if cfg.RunnableWorkers != nil {
+		limits.RunnableWorkers = *cfg.RunnableWorkers
+	}
+	if limits.MaxPools == 0 || limits.MaxPools > 65536 || limits.MaxWorkersPerPool == 0 || limits.MaxWorkersPerPool > 65536 ||
+		limits.MaxTotalWorkers == 0 || limits.MaxTotalWorkers > 1<<20 || limits.RunnableWorkers == 0 || limits.RunnableWorkers > 1<<20 ||
+		limits.MaxWorkersPerPool > limits.MaxTotalWorkers {
+		return pluginConfig{}, Limits{}, fmt.Errorf("pool: config limits are invalid")
+	}
+	return cfg, limits, nil
 }
 
-func (p *Plugin) Register(reg *wago.Registry) error {
-	p.service = newPools(p.workers, p.limits)
-	if p.workers == nil {
-		ref, err := plugin.Require(reg, workers.ServiceKey)
+func validateConfigObject(raw json.RawMessage) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	token, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if token != json.Delim('{') {
+		return fmt.Errorf("must be a JSON object")
+	}
+	seen := map[string]struct{}{}
+	for dec.More() {
+		keyToken, err := dec.Token()
 		if err != nil {
 			return err
 		}
-		p.service.ref = ref
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("object key is not a string")
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("duplicate field %q", key)
+		}
+		seen[key] = struct{}{}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return err
+		}
+		if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("field %q must not be null", key)
+		}
 	}
-	return plugin.Provide(reg, ServiceKey, p.service)
-}
-
-// Stop marks the service closed. Worker teardown is handled by the workers
-// service on runtime shutdown (linked workers are drained), so Stop only stops
-// the pool service from accepting new operations.
-func (p *Plugin) Stop(context.Context) error {
-	if p == nil || p.service == nil {
-		return nil
+	if _, err := dec.Token(); err != nil {
+		return err
 	}
-	p.service.close()
+	if err := dec.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("has a trailing JSON value")
+		}
+		return err
+	}
 	return nil
 }
 
-// Service returns the Pools handle, or nil before Register.
-func (p *Plugin) Service() *Pools {
-	if p == nil {
-		return nil
+func Definition() wago.PluginDefinition {
+	return wago.PluginDefinition{
+		ID: PluginID, Name: "Pool", Version: "0.1.0",
+		Description:   "Elastic, load-balanced, self-healing pools of Wago workers.",
+		Stability:     wago.Experimental,
+		Compatibility: wago.Compatibility{Engines: map[string]string{"wago": ">=0.1.0"}},
+		Provenance: wago.PluginProvenance{
+			Homepage: "https://github.com/JairusSW/pool", Repository: "https://github.com/JairusSW/pool", License: "Apache-2.0",
+			Authors: []string{"Jairus Tanaka"},
+		},
+		Requires: []wago.PluginRequirement{{ID: workers.PluginID, Version: "^0.1.0"}},
+		Consumes: []wago.ContractRequirement{{ID: workers.Contract.ID(), Major: workers.Contract.Major(), Mode: wago.ContractRequired}},
+		Provides: []wago.ContractSpec{Contract.Spec()}, ConfigSchema: append(json.RawMessage(nil), configSchema...),
 	}
-	return p.service
 }
 
-func init() { wago.RegisterExtension(PluginName, func() wago.Extension { return New() }) }
+func Provider() wago.PluginProvider {
+	return wago.PluginProvider{
+		Definition: Definition(), New: func() wago.Plugin { return new(plugin) },
+		ValidateConfig: func(raw json.RawMessage) error { _, _, err := decodePluginConfig(raw); return err },
+	}
+}
 
-// Pools is the host-side service: it creates and manages pools and routes tasks
-// across their workers. Obtain it with Plugin.Service() or through ServiceKey.
+type plugin struct{ service *Pools }
+
+func (p *plugin) Register(reg *wago.Registrar) error {
+	var cfg pluginConfig
+	if err := reg.Config(&cfg); err != nil {
+		return err
+	}
+	limits := normalizeLimits(Limits{})
+	if cfg.MaxPools != nil {
+		limits.MaxPools = *cfg.MaxPools
+	}
+	if cfg.MaxWorkersPerPool != nil {
+		limits.MaxWorkersPerPool = *cfg.MaxWorkersPerPool
+	}
+	if cfg.MaxTotalWorkers != nil {
+		limits.MaxTotalWorkers = *cfg.MaxTotalWorkers
+	}
+	if cfg.RunnableWorkers != nil {
+		limits.RunnableWorkers = *cfg.RunnableWorkers
+	}
+	ref, err := wagoplugin.Require(reg, workers.Contract)
+	if err != nil {
+		return err
+	}
+	p.service = newPools(ref, limits)
+	if err := wagoplugin.Provide(reg, Contract, Service(p.service)); err != nil {
+		return err
+	}
+	return reg.Lifecycle(wago.PluginLifecycle{
+		Start: func(context.Context) error { return p.service.start() },
+		Stop:  func(context.Context) error { return p.service.close() },
+	})
+}
+
+// Pools implements Pool's typed Service Contract. Consumers access it only
+// inside the callback passed to plugin.Ref.With.
 type Pools struct {
-	ref    *plugin.Ref[*workers.Workers]
+	ref    *wagoplugin.Ref[workers.Service]
 	limits Limits
 
 	wireMu  sync.Mutex
-	workers *workers.Workers
 	wired   bool
+	message workers.Subscription
+	exit    workers.Subscription
 
-	hasObs atomic.Bool
-	obsMu  sync.RWMutex
-	obs    []func(*PoolEvent)
+	hasObs         atomic.Bool
+	obsMu          sync.Mutex
+	nextObs        uint64
+	obs            map[uint64]*eventObserver
+	observerPanics []error
 
 	mu       sync.Mutex
 	pools    map[PoolID]*pool
@@ -418,10 +520,10 @@ type Pools struct {
 	closed   bool
 }
 
-func newPools(explicit *workers.Workers, limits Limits) *Pools {
+func newPools(ref *wagoplugin.Ref[workers.Service], limits Limits) *Pools {
 	return &Pools{
-		workers: explicit, limits: normalizeLimits(limits), next: 1,
-		pools: map[PoolID]*pool{}, byWorker: map[WorkerID]*pool{},
+		ref: ref, limits: normalizeLimits(limits), next: 1,
+		pools: map[PoolID]*pool{}, byWorker: map[WorkerID]*pool{}, obs: map[uint64]*eventObserver{},
 	}
 }
 
@@ -505,45 +607,154 @@ func (pl *pool) rand() uint64 {
 	return x
 }
 
-// ensureWired resolves the workers service (available after the plugin plan
-// commits) and registers the pool's OnMessage/OnExit observers exactly once. It
-// is safe to call on every public method and retries until the service resolves.
-func (p *Pools) ensureWired() error {
+// start resolves the exact reviewed Workers binding and owns both observer
+// subscriptions before Pool becomes active.
+func (p *Pools) start() error {
 	p.wireMu.Lock()
 	defer p.wireMu.Unlock()
 	if p.wired {
 		return nil
 	}
-	svc := p.workers
-	if svc == nil {
-		if p.ref == nil {
-			return ErrPoolsInactive
+	if p.ref == nil {
+		return ErrPoolsInactive
+	}
+	if err := p.ref.With(func(svc workers.Service) error {
+		if svc == nil {
+			return ErrWorkersUnavailable
 		}
-		got, err := p.ref.Get()
+		var err error
+		p.message, err = svc.ObserveMessages(func(ctx *workers.MessageContext) error { p.onMessage(ctx); return nil })
 		if err != nil {
 			return err
 		}
-		if got == nil {
-			return ErrWorkersUnavailable
+		p.exit, err = svc.ObserveExits(func(ctx *workers.WorkerExitContext) { p.onExit(ctx) })
+		if err != nil {
+			_ = svc.Unsubscribe(p.message)
+			p.message = workers.Subscription{}
+			return err
 		}
-		svc = got
+		return nil
+	}); err != nil {
+		return err
 	}
-	svc.OnMessage(func(ctx *workers.MessageContext) error { p.onMessage(ctx); return nil })
-	svc.OnExit(func(ctx *workers.WorkerExitContext) { p.onExit(ctx) })
-	p.workers = svc
 	p.wired = true
 	return nil
 }
 
-// OnEvent registers observers notified of pool lifecycle and routing events.
-func (p *Pools) OnEvent(fns ...func(*PoolEvent)) {
-	if len(fns) == 0 {
-		return
+func (p *Pools) ensureWired() error {
+	p.wireMu.Lock()
+	wired := p.wired
+	p.wireMu.Unlock()
+	if !wired {
+		return ErrPoolsInactive
+	}
+	return nil
+}
+
+func (p *Pools) withWorkers(fn func(workers.Service) error) error {
+	if err := p.ensureWired(); err != nil {
+		return err
+	}
+	if p.ref == nil {
+		return ErrWorkersUnavailable
+	}
+	return p.ref.With(fn)
+}
+
+// EventSubscription is an opaque observer token. Pass it back through
+// Service.UnsubscribeEvents inside a leased contract call.
+type EventSubscription struct{ id uint64 }
+
+type eventObserver struct {
+	id       uint64
+	fn       func(*PoolEvent)
+	mu       sync.Mutex
+	cond     *sync.Cond
+	active   bool
+	inFlight uint32
+}
+
+func newEventObserver(id uint64, fn func(*PoolEvent)) *eventObserver {
+	o := &eventObserver{id: id, fn: fn, active: true}
+	o.cond = sync.NewCond(&o.mu)
+	return o
+}
+
+func (o *eventObserver) invoke(event *PoolEvent) (panicErr error) {
+	o.mu.Lock()
+	if !o.active {
+		o.mu.Unlock()
+		return nil
+	}
+	o.inFlight++
+	o.mu.Unlock()
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				panicErr = fmt.Errorf("pool: event observer %d panicked: %v", o.id, recovered)
+			}
+		}()
+		o.fn(event)
+	}()
+	o.mu.Lock()
+	o.inFlight--
+	if o.inFlight == 0 {
+		o.cond.Broadcast()
+	}
+	o.mu.Unlock()
+	return panicErr
+}
+
+func (o *eventObserver) stop() {
+	o.mu.Lock()
+	o.active = false
+	for o.inFlight != 0 {
+		o.cond.Wait()
+	}
+	o.mu.Unlock()
+}
+
+// ObserveEvents registers an observer until its returned Subscription closes.
+func (p *Pools) ObserveEvents(fn func(*PoolEvent)) (EventSubscription, error) {
+	if p == nil || fn == nil {
+		return EventSubscription{}, fmt.Errorf("pool: invalid event observer")
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return EventSubscription{}, ErrPoolsClosed
 	}
 	p.obsMu.Lock()
-	p.obs = append(p.obs, fns...)
-	p.obsMu.Unlock()
+	p.nextObs++
+	if p.nextObs == 0 {
+		p.obsMu.Unlock()
+		p.mu.Unlock()
+		return EventSubscription{}, fmt.Errorf("pool: observer ID space exhausted")
+	}
+	id := p.nextObs
+	observer := newEventObserver(id, fn)
+	p.obs[id] = observer
 	p.hasObs.Store(true)
+	p.obsMu.Unlock()
+	p.mu.Unlock()
+	return EventSubscription{id: id}, nil
+}
+
+// UnsubscribeEvents removes one observer and waits for callbacks already in
+// flight. It is idempotent. Do not call it from inside that observer callback.
+func (p *Pools) UnsubscribeEvents(subscription EventSubscription) error {
+	if p == nil || subscription.id == 0 {
+		return fmt.Errorf("pool: invalid event subscription")
+	}
+	p.obsMu.Lock()
+	observer := p.obs[subscription.id]
+	delete(p.obs, subscription.id)
+	p.hasObs.Store(len(p.obs) != 0)
+	p.obsMu.Unlock()
+	if observer != nil {
+		observer.stop()
+	}
+	return nil
 }
 
 // fire delivers ev to observers. It must never be called while holding p.mu, so
@@ -553,11 +764,23 @@ func (p *Pools) fire(ev *PoolEvent) {
 	if !p.hasObs.Load() {
 		return
 	}
-	p.obsMu.RLock()
-	fns := p.obs
-	p.obsMu.RUnlock()
-	for _, fn := range fns {
-		fn(ev)
+	p.obsMu.Lock()
+	ids := make([]uint64, 0, len(p.obs))
+	for id := range p.obs {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	observers := make([]*eventObserver, 0, len(ids))
+	for _, id := range ids {
+		observers = append(observers, p.obs[id])
+	}
+	p.obsMu.Unlock()
+	for _, observer := range observers {
+		if panicErr := observer.invoke(ev); panicErr != nil {
+			p.obsMu.Lock()
+			p.observerPanics = append(p.observerPanics, panicErr)
+			p.obsMu.Unlock()
+		}
 	}
 }
 
@@ -652,15 +875,26 @@ func (p *Pools) grow(caller wago.HostModule, id PoolID, n uint32) (uint32, error
 		// Reserve the global slot before forking so concurrent grows cannot
 		// overshoot MaxTotalWorkers; released below on any failure to add.
 		p.total++
-		wopts, tableIndex, svc := pl.wopts, pl.tableIndex, p.workers
+		wopts, tableIndex := pl.wopts, pl.tableIndex
 		p.mu.Unlock()
 
-		wid, err := svc.Spawn(caller, tableIndex, wopts)
+		var wid WorkerID
+		err := p.withWorkers(func(svc workers.Service) error {
+			var err error
+			wid, err = svc.Spawn(caller, tableIndex, wopts)
+			if err != nil {
+				return err
+			}
+			if err := svc.Link(caller, wid); err != nil {
+				_ = svc.Kill(wid)
+				return err
+			}
+			return nil
+		})
 		if err != nil {
 			p.unreserve()
 			return spawned, err
 		}
-		_ = svc.Link(caller, wid) // tie the worker's lifetime to its creator
 
 		p.mu.Lock()
 		pl = p.pools[id]
@@ -669,7 +903,7 @@ func (p *Pools) grow(caller wago.HostModule, id PoolID, n uint32) (uint32, error
 				p.total-- // release: the member is never added
 			}
 			p.mu.Unlock()
-			_ = svc.Kill(wid)
+			_ = p.withWorkers(func(svc workers.Service) error { return svc.Kill(wid) })
 			return spawned, ErrPoolNotFound
 		}
 		p.addMemberLocked(pl, wid)
@@ -772,9 +1006,17 @@ func (p *Pools) submit(id PoolID, key, tag uint64, payload []byte) (WorkerID, er
 	}
 	pl.submitted++
 	if pl.strategy == Broadcast {
-		ids, svc := pl.snapshotIDs(), p.workers
+		ids := pl.snapshotIDs()
 		p.mu.Unlock()
-		p.broadcastTo(id, svc, ids, tag, payload)
+		var delivered int
+		err := p.withWorkers(func(svc workers.Service) error {
+			delivered = p.broadcastTo(id, svc, ids, tag, payload)
+			return nil
+		})
+		if err != nil {
+			return 0, err
+		}
+		_ = delivered
 		return 0, nil
 	}
 	ordered := pl.order(key)
@@ -787,24 +1029,30 @@ func (p *Pools) submit(id PoolID, key, tag uint64, payload []byte) (WorkerID, er
 	} else if len(ordered) > 0 {
 		cands = []WorkerID{ordered[0].id}
 	}
-	svc := p.workers
+	overflow := pl.overflow
 	p.mu.Unlock()
 
 	if len(cands) == 0 {
 		p.recordRejected(id)
 		return 0, ErrPoolEmpty
 	}
-	for _, wid := range cands {
-		err := svc.Send(wid, tag, payload)
-		if err == nil {
-			p.recordRouted(id, wid)
-			return wid, nil
+	var accepted WorkerID
+	if err := p.withWorkers(func(svc workers.Service) error {
+		for _, wid := range cands {
+			if err := svc.Send(wid, tag, payload); err == nil {
+				accepted = wid
+				return nil
+			}
 		}
-		// A full mailbox, or a worker that vanished mid-route, just means we try
-		// the next candidate; any other error is likewise non-fatal to the pool.
-		_ = err
+		return nil
+	}); err != nil {
+		return 0, err
 	}
-	if pl.overflow == OverflowShed {
+	if accepted != 0 {
+		p.recordRouted(id, accepted)
+		return accepted, nil
+	}
+	if overflow == OverflowShed {
 		p.recordShed(id)
 		return 0, nil
 	}
@@ -892,12 +1140,17 @@ func (p *Pools) Broadcast(id PoolID, tag uint64, payload []byte) (int, error) {
 		return 0, ErrPoolDraining
 	}
 	pl.submitted++
-	ids, svc := pl.snapshotIDs(), p.workers
+	ids := pl.snapshotIDs()
 	p.mu.Unlock()
-	return p.broadcastTo(id, svc, ids, tag, payload), nil
+	var delivered int
+	err := p.withWorkers(func(svc workers.Service) error {
+		delivered = p.broadcastTo(id, svc, ids, tag, payload)
+		return nil
+	})
+	return delivered, err
 }
 
-func (p *Pools) broadcastTo(id PoolID, svc *workers.Workers, ids []WorkerID, tag uint64, payload []byte) int {
+func (p *Pools) broadcastTo(id PoolID, svc workers.Service, ids []WorkerID, tag uint64, payload []byte) int {
 	delivered := 0
 	for _, wid := range ids {
 		if err := svc.Send(wid, tag, payload); err == nil {
@@ -975,11 +1228,17 @@ func (p *Pools) Reconcile(caller wago.HostModule, id PoolID) error {
 	if !pl.draining && desired > live {
 		deficit = desired - live
 	}
-	svc := p.workers
 	p.mu.Unlock()
 
-	for _, wid := range toKill {
-		_ = svc.Kill(wid)
+	if len(toKill) != 0 {
+		if err := p.withWorkers(func(svc workers.Service) error {
+			for _, wid := range toKill {
+				_ = svc.Kill(wid)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	if deficit > 0 {
 		if _, err := p.grow(caller, id, deficit); err != nil {
@@ -1089,10 +1348,14 @@ func (p *Pools) Drain(id PoolID) error {
 			m.killWhenIdle = true
 		}
 	}
-	svc := p.workers
 	p.mu.Unlock()
-	for _, wid := range killNow {
-		_ = svc.Kill(wid)
+	if err := p.withWorkers(func(svc workers.Service) error {
+		for _, wid := range killNow {
+			_ = svc.Kill(wid)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	p.fire(&PoolEvent{Kind: PoolDrained, Pool: id})
 	return nil
@@ -1119,10 +1382,14 @@ func (p *Pools) Destroy(id PoolID) error {
 			p.total--
 		}
 	}
-	svc := p.workers
 	p.mu.Unlock()
-	for _, wid := range ids {
-		_ = svc.Kill(wid)
+	if err := p.withWorkers(func(svc workers.Service) error {
+		for _, wid := range ids {
+			_ = svc.Kill(wid)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	p.fire(&PoolEvent{Kind: PoolDestroyed, Pool: id})
 	return nil
@@ -1177,10 +1444,9 @@ func (p *Pools) onMessage(ctx *workers.MessageContext) {
 			}
 		}
 	}
-	svc := p.workers
 	p.mu.Unlock()
 	if kill {
-		_ = svc.Kill(ctx.WorkerID)
+		_ = p.withWorkers(func(svc workers.Service) error { return svc.Kill(ctx.WorkerID) })
 	}
 }
 
@@ -1243,10 +1509,41 @@ func (p *Pools) applySupervisionLocked(pl *pool, kind workers.WorkerExitKind) {
 	}
 }
 
-func (p *Pools) close() {
+func (p *Pools) close() error {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil
+	}
 	p.closed = true
+	p.mu.Unlock()
+	p.wireMu.Lock()
+	message, exit := p.message, p.exit
+	p.message, p.exit = workers.Subscription{}, workers.Subscription{}
+	p.wired = false
+	p.wireMu.Unlock()
+	var unsubscribeErr error
+	if p.ref != nil {
+		unsubscribeErr = p.ref.With(func(service workers.Service) error {
+			return errors.Join(service.Unsubscribe(message), service.Unsubscribe(exit))
+		})
+	}
+	p.obsMu.Lock()
+	observers := make([]*eventObserver, 0, len(p.obs))
+	for _, observer := range p.obs {
+		observers = append(observers, observer)
+	}
+	p.obs = nil
+	p.hasObs.Store(false)
+	panicErrs := append([]error(nil), p.observerPanics...)
+	p.observerPanics = nil
+	p.obsMu.Unlock()
+	for _, observer := range observers {
+		observer.stop()
+	}
+	p.mu.Lock()
 	p.pools = map[PoolID]*pool{}
 	p.byWorker = map[WorkerID]*pool{}
 	p.mu.Unlock()
+	return errors.Join(append([]error{unsubscribeErr}, panicErrs...)...)
 }
