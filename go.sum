@@ -1,4 +1,4 @@
-github.com/wago-org/wago v0.0.0-20260812140322-f669c98a153e h1:lBgpSR9MAVZvlF3RNNpKzwTF6C4ZtyeNqu9pfKzQwYE=
-github.com/wago-org/wago v0.0.0-20260812140322-f669c98a153e/go.mod h1:6XmxI3S5qJ+YAzObyXjC6FmxHtbLhBBxrglzix42zl8=
-github.com/wago-org/workers v0.0.0-20260812140403-4c4387e62aee h1:W+Iy59jqLtY90hzQVnBx/8tLu5awHCCcilzARtwEisc=
-github.com/wago-org/workers v0.0.0-20260812140403-4c4387e62aee/go.mod h1:yEgtdx0lMsE7WmnOliXd6jQWX3gbnCyaLzaiqkp2sn4=
+github.com/wago-org/wago v0.0.0-20260812141033-492d7b4905ea h1:SU/eDjjh7SFPwc9gDT7qFqqVIA+N/YND3lFqoSDcqbg=
+github.com/wago-org/wago v0.0.0-20260812141033-492d7b4905ea/go.mod h1:6XmxI3S5qJ+YAzObyXjC6FmxHtbLhBBxrglzix42zl8=
+github.com/wago-org/workers v0.0.0-20260812141104-025a9f1fdc6f h1:bltNGfGU9NJtjj2wR5uk15AepOgoN15Xyy6cs0iMawQ=
+github.com/wago-org/workers v0.0.0-20260812141104-025a9f1fdc6f/go.mod h1:e4thGhtw3UiATs1Qn+yDM1M4No6Vrx1TLqghnjZSk6U=
