@@ -2,6 +2,6 @@ module github.com/JairusSW/pool
 
 go 1.24.0
 
-require github.com/wago-org/wago v0.0.0-20260812144524-1c58c9862d25
+require github.com/wago-org/wago v0.1.0-beta.8.0.20260916025321-6f31d3371e1d
 
-require github.com/wago-org/workers v0.0.0-20260812144603-4a90ff25d5e4
+require github.com/wago-org/workers v0.1.1-0.20260916030119-0241baf72ee3
