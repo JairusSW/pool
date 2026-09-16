@@ -11,7 +11,7 @@ import (
 
 	"github.com/wago-org/wago"
 	wagoplugin "github.com/wago-org/wago/plugin"
-	"github.com/wago-org/wago/tests/wasmtest"
+	"github.com/wago-org/wago/tests/support/wasmtest"
 	"github.com/wago-org/workers"
 )
 
@@ -118,11 +118,9 @@ func driverProvider(d *driver) wago.PluginProvider {
 			if err != nil {
 				return err
 			}
-			module, err := imports.Module("env")
-			if err != nil {
-				return err
-			}
-			module.Func("run", d.run).Params(wago.ValI32, wago.ValI32, wago.ValI32).Results(wago.ValI32)
+			imports.HostFunc("env", "run", func(caller wago.Caller, call wago.HostCall) {
+				d.run(caller, call.ParamSlots(), call.ResultSlots())
+			}).Params(wago.ValI32, wago.ValI32, wago.ValI32).Results(wago.ValI32)
 			return reg.Lifecycle(wago.PluginLifecycle{
 				Start: d.start,
 				Stop: func(context.Context) error {
@@ -374,7 +372,7 @@ func TestContractGraphRoutesAndScales(t *testing.T) {
 	waitFor(t, "tasks", func() bool { return r.d.messages() == 20 })
 	r.invoke(t, "scale")
 	waitFor(t, "scale", func() bool { return r.stats(t).Live == 4 })
-	if err := r.rt.Close(); err != nil {
+	if err := r.rt.CloseContext(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.d.poolRef.With(func(Service) error { return nil }); !errors.Is(err, wago.ErrPermissionDenied) {

@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -294,10 +295,16 @@ func TestStressRuntimeCloseWhileBusy(t *testing.T) {
 			}
 		}()
 	}
-	done := make(chan struct{})
-	go func() { r.close(); close(done) }()
+	closeDone := make(chan error, 1)
+	go func() {
+		_ = r.in.Close()
+		closeDone <- r.rt.CloseContext(context.Background())
+	}()
 	select {
-	case <-done:
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("runtime close: %v", err)
+		}
 	case <-time.After(10 * time.Second):
 		stop.Store(true)
 		wg.Wait()
