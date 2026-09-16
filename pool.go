@@ -440,7 +440,7 @@ func validateConfigObject(raw json.RawMessage) error {
 
 func Definition() wago.PluginDefinition {
 	return wago.PluginDefinition{
-		ID: PluginID, Name: "Pool", Version: "0.1.0",
+		ID: PluginID, Name: "Pool", Version: "0.1.1",
 		Description:   "Elastic, load-balanced, self-healing pools of Wago workers.",
 		Stability:     wago.Experimental,
 		Compatibility: wago.Compatibility{Engines: map[string]string{"wago": ">=0.1.0"}},

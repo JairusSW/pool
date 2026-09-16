@@ -11,7 +11,7 @@ them, reconciles target size, and applies bounded restart and autoscaling rules.
 Workers owns the privileged instances. Pool has no Wago authorities of its own;
 it depends on Workers and calls its typed contract.
 
-> Pool is experimental (`v0.1.0`). Its API may change before the first stable
+> Pool is experimental (`v0.1.1`). Its API may change before the first stable
 > release.
 
 ## Install

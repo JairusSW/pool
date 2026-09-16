@@ -6,7 +6,7 @@
       "definition": {
         "id": "github.com/JairusSW/pool",
         "name": "Pool",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "description": "Elastic, load-balanced, self-healing pools of Wago workers.",
         "stability": "experimental",
         "compatibility": {
@@ -68,7 +68,7 @@
           }
         ]
       },
-      "definitionDigest": "sha256:7b35e7dbafbeb8bc6c89f9171b70798fb5fd096d9ee8cd7014d5a39fcee7d9e0"
+      "definitionDigest": "sha256:911779b4e6a06ca53122a1e942b2fc99a1cad670bf0a1e9477787cee02267b3d"
     }
   ]
 }

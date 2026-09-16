@@ -2,7 +2,7 @@
   "$schema": "https://wago.sh/v1/schema.json",
   "package": {
     "module": "github.com/JairusSW/pool",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "name": "Pool",
     "description": "Elastic, load-balanced, self-healing pools of Wago workers.",
     "stability": "experimental",
